@@ -105,8 +105,19 @@ pub const DB = struct {
 
         defer _ = c.mysql_stmt_close(stmt);
 
-        var r_binds = [_]c.MYSQL_BIND{std.mem.zeroes(c.MYSQL_BIND)};
+        var r_binds = try allocator.alloc(c.MYSQL_BIND, 1);
+        //var r_binds = [_]c.MYSQL_BIND{std.mem.zeroes(c.MYSQL_BIND)};
+        const r1 = try allocator.alloc(c.MYSQL_BIND, 1);
+        const r2 = [_]c.MYSQL_BIND{std.mem.zeroes(c.MYSQL_BIND)};
 
+        for (0..1) |i| {
+            r_binds[i] = std.mem.zeroes(c.MYSQL_BIND);
+            //_ = i;
+        }
+
+        std.debug.print("typeof works {any}\n", .{@TypeOf(r_binds)});
+        std.debug.print("typeof r1 {any}\n", .{@TypeOf(r1)});
+        std.debug.print("typeof r1 {any}\n", .{@TypeOf(r2)});
         var length: c_ulong = 0;
         var is_null: u8 = 0;
         var err: u8 = 0;
@@ -124,7 +135,7 @@ pub const DB = struct {
         std.debug.print("error: {d}, length: {d}, is_null: {d} \n", .{ err, length, is_null });
         std.debug.print("binds: {any} \n", .{r_binds[0]});
 
-        if (c.mysql_stmt_bind_result(stmt, @as([*c]c.MYSQL_BIND, @ptrCast(@alignCast(&r_binds)))) != 0) {
+        if (c.mysql_stmt_bind_result(stmt, @as([*c]c.MYSQL_BIND, @ptrCast(@alignCast(r_binds)))) != 0) {
             print("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self.conn)});
             return error.prepareStmt;
         }
