@@ -62,13 +62,8 @@ pub const DB = struct {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
-        //const query =
-        //     \\ SELECT
-        //     \\    ? as test;
-        // ;
         const query =
             \\ SELECT
-            //\\     NULL ;
             \\     "hello world for a long time, now" ;
             \\
         ;
@@ -110,36 +105,7 @@ pub const DB = struct {
 
         defer _ = c.mysql_stmt_close(stmt);
 
-        const name1 = try std.ArrayList(u8).initCapacity(allocator, columns[0].length);
-
         var r_binds = [_]c.MYSQL_BIND{std.mem.zeroes(c.MYSQL_BIND)};
-        const Row = struct { length: c_ulong, err: u8, is_null: u8, buffer: *[]u8 };
-
-        const row = Row{
-            .length = 0,
-            .err = 0,
-            .is_null = 0,
-            .buffer = @constCast(@ptrCast(&name1.items)),
-        };
-
-        const pt: *c_ulong = @constCast(@ptrCast(&row.length));
-        //ptr fine
-        var l: c_ulong = 100;
-        std.debug.print("le: {d} \n", .{l});
-        const l_ptr = &l;
-        l_ptr.* = 123;
-        pt.* = 99;
-        std.debug.print("le: {d} \n", .{l});
-        // ptr end
-
-        var t: c_ulong = 100;
-        std.debug.print("t {d} \n", .{t});
-        const t_ptr = @constCast(&t);
-        t_ptr.* = 123;
-        std.debug.print("le: {d} \n", .{t});
-
-        pt.* = 99;
-        std.debug.print("row =========================================================================================== \n", .{});
 
         var length: c_ulong = 0;
         var is_null: u8 = 0;
@@ -184,27 +150,15 @@ pub const DB = struct {
 
             std.debug.print("error: {d}, length: {d}, is_null: {d} \n", .{ err, length, is_null });
             rowCount = rowCount + 1;
-            //  const col = columns.?[j];
-            //const rcol = r_binds[j];
-            //std.debug.print("Column type: {d}, length: {d} real length: {d} ", .{ col.type, col.length, rcol.length.* });
             if (is_null == 1) {
                 std.debug.print("Row data is NULL \n", .{});
             } else {
                 std.debug.print("Row data is {s} \n", .{buff});
-                //std.debug.print("Row data is {c} \n", .{buff[0]});
-                //std.debug.print("Row data is {c} \n", .{buff[1]});
-                //                std.debug.print("Row data is {c} \n", .{buff});
-                //std.debug.print("Row data is {s} \n", .{r_binds[0].buffer.?[0..length]});
 
                 const c_string: [*c]const u8 = @as([*c]u8, @ptrCast(@constCast(@alignCast(r_binds[0].buffer))));
                 std.debug.print("Row data String: {s} \n", .{c_string});
                 const c_string2: [*c]const u8 = @as([*c]u8, @ptrCast(@constCast(@alignCast(&buff))));
                 std.debug.print("Row data String: {s} \n", .{c_string2});
-                //const data: []const u8 = c_string[0..columns[0].length.*]; //resBind[i].buffer;
-                //std.debug.print("Row data String: {s} \n", .{data});
-                //const data: [*:0]const u8 = c_string; //resBind[i].buffer;
-                // std.debug.print("Row is {s} \n", .{name1.items.len});
-                //std.debug.print("Row length is {d} \n", .{name1.items.len});
             }
         }
     }
