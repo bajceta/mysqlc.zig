@@ -64,7 +64,10 @@ pub const DB = struct {
         const allocator = arena.allocator();
         const query =
             \\ SELECT
-            \\     "hello world for a long time, now" ;
+            \\     "hello world for a long time, now" as Test,
+            \\   "sec value" as val2,
+            \\   "sec value" as val3,
+            \\     "hello world for a long time, now" as Test2;
             \\
         ;
         const stmt: *c.MYSQL_STMT = blk: {
@@ -104,36 +107,31 @@ pub const DB = struct {
         const columns = c.mysql_fetch_fields(metadata);
 
         defer _ = c.mysql_stmt_close(stmt);
+        const cols = 4;
 
-        var r_binds = try allocator.alloc(c.MYSQL_BIND, 1);
-        //var r_binds = [_]c.MYSQL_BIND{std.mem.zeroes(c.MYSQL_BIND)};
-        const r1 = try allocator.alloc(c.MYSQL_BIND, 1);
-        const r2 = [_]c.MYSQL_BIND{std.mem.zeroes(c.MYSQL_BIND)};
+        const buffers: []*[]u8 = try allocator.alloc(*[]u8, cols);
+        var length: []c_ulong = try allocator.alloc(c_ulong, cols);
+        var is_null: []u8 = try allocator.alloc(u8, cols);
+        var err: []u8 = try allocator.alloc(u8, cols);
+        //var b2 = std.ArrayList([]u8).initCapacity(allocator, cols);
 
-        for (0..1) |i| {
+        var r_binds = try allocator.alloc(c.MYSQL_BIND, cols);
+        for (0..cols) |i| {
             r_binds[i] = std.mem.zeroes(c.MYSQL_BIND);
-            //_ = i;
+            buffers[i] = @constCast(&try allocator.alloc(u8, columns[i].length));
+            std.debug.print("PTR len: {d} , {d}: {d} \n", .{ columns[i].length, i, &buffers[i] });
+            //var buff = try allocator.alloc(u8, columns[i].length);
+
+            r_binds[i].buffer_length = columns[i].length;
+            r_binds[i].buffer = @constCast(@ptrCast(@alignCast(&buffers[i])));
+            r_binds[i].is_null = @ptrCast(@alignCast(&is_null[i]));
+            r_binds[i].length = @constCast(@ptrCast(&length[i]));
+            r_binds[i].@"error" = @ptrCast(&err[i]);
+            r_binds[i].buffer_type = c.MYSQL_TYPE_STRING;
+            std.debug.print("binds: {any} \n", .{r_binds[i]});
         }
 
-        std.debug.print("typeof works {any}\n", .{@TypeOf(r_binds)});
-        std.debug.print("typeof r1 {any}\n", .{@TypeOf(r1)});
-        std.debug.print("typeof r1 {any}\n", .{@TypeOf(r2)});
-        var length: c_ulong = 0;
-        var is_null: u8 = 0;
-        var err: u8 = 0;
-
-        const buff = try allocator.alloc(u8, columns[0].length);
-        r_binds[0].buffer_length = columns[0].length;
-        r_binds[0].buffer = @constCast(@ptrCast(@alignCast(&buff)));
-        r_binds[0].is_null = @ptrCast(@alignCast(&is_null));
-        r_binds[0].length = @constCast(@ptrCast(&length));
-        r_binds[0].@"error" = @ptrCast(&err);
-        r_binds[0].buffer_type = c.MYSQL_TYPE_STRING;
-
-        std.debug.print("buff: {s}  addr: {d} \n", .{ buff, &buff });
-
         std.debug.print("error: {d}, length: {d}, is_null: {d} \n", .{ err, length, is_null });
-        std.debug.print("binds: {any} \n", .{r_binds[0]});
 
         if (c.mysql_stmt_bind_result(stmt, @as([*c]c.MYSQL_BIND, @ptrCast(@alignCast(r_binds)))) != 0) {
             print("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self.conn)});
@@ -161,15 +159,17 @@ pub const DB = struct {
 
             std.debug.print("error: {d}, length: {d}, is_null: {d} \n", .{ err, length, is_null });
             rowCount = rowCount + 1;
-            if (is_null == 1) {
-                std.debug.print("Row data is NULL \n", .{});
-            } else {
-                std.debug.print("Row data is {s} \n", .{buff});
-
-                const c_string: [*c]const u8 = @as([*c]u8, @ptrCast(@constCast(@alignCast(r_binds[0].buffer))));
-                std.debug.print("Row data String: {s} \n", .{c_string});
-                const c_string2: [*c]const u8 = @as([*c]u8, @ptrCast(@constCast(@alignCast(&buff))));
-                std.debug.print("Row data String: {s} \n", .{c_string2});
+            for (0..cols) |i| {
+                if (is_null[i] == 1) {
+                    std.debug.print("Row data is NULL \n", .{});
+                } else {
+                    const c_string: [*c]const u8 = @as([*c]u8, @ptrCast(@constCast(@alignCast(r_binds[i].buffer))));
+                    std.debug.print("Row data String: {s} \n", .{c_string});
+                    //                    const c_string2: [*c]const u8 = @as([*c]u8, @ptrCast(@constCast(@alignCast(r_binds[1].buffer))));
+                    //                   std.debug.print("Row data String: {s} \n", .{c_string2});
+                    // const c_string2: [*c]const u8 = @as([*c]u8, @ptrCast(@constCast(@alignCast(&buff))));
+                    // std.debug.print("Row data String: {s} \n", .{c_string2});
+                }
             }
         }
     }
