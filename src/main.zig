@@ -238,12 +238,23 @@ pub const DB = struct {
         if (hasParams) {
             var param_binds = try allocator.alloc(c.MYSQL_BIND, params.len);
             inline for (params, 0..) |param, i| {
+                const T = @TypeOf(param);
                 param_binds[i] = std.mem.zeroes(c.MYSQL_BIND);
-                print("Param:{d} {s} , len: {d} \n", .{ i, param, param.len });
-                param_binds[0].buffer_type = c.MYSQL_TYPE_STRING;
-                param_binds[0].buffer_length = param.len;
-                param_binds[0].is_null = 0;
-                param_binds[0].buffer = @constCast(@ptrCast(param.ptr));
+                switch (T) {
+                    bool => {
+                        param_binds[i].buffer_type = c.MYSQL_TYPE_TINY;
+                        print("Input param boolean: {b}  ", .{@intFromBool(param)});
+                        param_binds[i].buffer = @ptrCast(@constCast(&@intFromBool(param)));
+                        param_binds[i].buffer_length = 1;
+                    },
+                    else => {
+                        param_binds[i].buffer_type = c.MYSQL_TYPE_STRING;
+                        param_binds[i].buffer = @constCast(@ptrCast(param.ptr));
+                        param_binds[i].buffer_length = param.len;
+                        print("Param:{d} {s} , len: {d} \n", .{ i, param, param.len });
+                    },
+                }
+                param_binds[i].is_null = 0;
                 std.debug.print("Param binds: {any} \n", .{param_binds[i]});
             }
             if (c.mysql_stmt_bind_param(stmt, @ptrCast(@alignCast(param_binds))) != 0) {
@@ -277,20 +288,25 @@ pub const DB = struct {
         //std.debug.print("PTRs  {any} , {any} {d} {d} \n", .{ buffers.ptr, length.ptr, &is_null, &err });
         var r_binds = try allocator.alloc(c.MYSQL_BIND, cols);
         for (0..cols) |i| {
-            print("columns {any}\n", .{columns[i]});
             r_binds[i] = std.mem.zeroes(c.MYSQL_BIND);
+            switch (columns[i].type) {
+                c.MYSQL_TYPE_TINY => {
+                    r_binds[i].buffer_type = c.MYSQL_TYPE_TINY;
+                },
+                else => {
+                    r_binds[i].buffer_type = c.MYSQL_TYPE_STRING;
+                },
+            }
+            print("Column: {s}\n", .{columns[i].name});
+            print("columns {any}\n", .{columns[i]});
             buffers[i] = try allocator.alloc(u8, columns[i].length);
             r_binds[i].buffer_length = columns[i].length;
             r_binds[i].buffer = @constCast(@ptrCast(@alignCast(buffers[i])));
             r_binds[i].is_null = @ptrCast(@alignCast(&is_null[i]));
             r_binds[i].length = @constCast(@ptrCast(&length[i]));
             r_binds[i].@"error" = @ptrCast(&err[i]);
-            r_binds[i].buffer_type = c.MYSQL_TYPE_STRING;
             //std.debug.print("binds: {any} \n", .{r_binds[i]});
         }
-
-        //      std.debug.print("buffers: {any}\n", .{buffers});
-        //std.debug.print("error: {d}, length: {d}, is_null: {d} \n", .{ err, length, is_null });
 
         if (c.mysql_stmt_bind_result(stmt, @as([*c]c.MYSQL_BIND, @ptrCast(@alignCast(r_binds)))) != 0) {
             print("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self.conn)});
@@ -320,12 +336,21 @@ pub const DB = struct {
                 if (is_null[i] == 1) {
                     std.debug.print("Row data is NULL \n", .{});
                 } else {
-                    const c_string: [*c]const u8 = @as([*c]u8, @ptrCast(@constCast(@alignCast(r_binds[i].buffer))));
-                    std.debug.print("Row data String: {s} \n", .{c_string});
+                    switch (r_binds[i].buffer_type) {
+                        c.MYSQL_TYPE_TINY => {
+                            const data: *u8 = @as(*u8, @ptrCast(@constCast(r_binds[i].buffer)));
+                            std.debug.print("Row data Tiny: {d} \n", .{data.*});
+                        },
+                        else => {
+                            const c_string: [*c]const u8 = @as([*c]u8, @ptrCast(@constCast(@alignCast(r_binds[i].buffer))));
+                            std.debug.print("Row data String: {s} \n", .{c_string});
+                        },
+                    }
                 }
             }
         }
     }
+
     fn insertTable(self: DB) !void {
         const cat_colors = .{
             .{
@@ -423,7 +448,6 @@ var testarena: std.heap.ArenaAllocator = undefined;
 
 test "connect" {
     testarena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    //defer arena.deinit();
     const testallocator = testarena.allocator();
 
     testdb = try DB.init(testallocator, .{
@@ -433,13 +457,11 @@ test "connect" {
         .password = "my-secret-pw",
     });
 }
-//defer db.deinit();
 test "simple select prepared statement" {
     const testallocator = testarena.allocator();
     const query = "SELECT 'just a happy test';";
     const params = .{};
     try testdb.runPreparedStatement(testallocator, query, params);
-    //    testallocator.reset();
 }
 
 test "simple select prepared statement 2 columns" {
@@ -447,7 +469,6 @@ test "simple select prepared statement 2 columns" {
     const query = "SELECT 'just a happy test', 'more info';";
     const params = .{};
     try testdb.runPreparedStatement(testallocator, query, params);
-    //    testallocator.reset();
 }
 
 test "simple select prepared statement with single param" {
@@ -455,7 +476,6 @@ test "simple select prepared statement with single param" {
     const query = "SELECT ?  as test";
     const params = .{"going on"};
     try testdb.runPreparedStatement(testallocator, query, params);
-    //    testallocator.reset();
 }
 
 test "simple select prepared statement with single param 2" {
@@ -463,7 +483,6 @@ test "simple select prepared statement with single param 2" {
     const query = "SELECT 'just a happy test' , ? as inparam;";
     const params = .{"going on"};
     try testdb.runPreparedStatement(testallocator, query, params);
-    //    testallocator.reset();
 }
 
 test "simple select prepared statement with single param 3" {
@@ -474,7 +493,6 @@ test "simple select prepared statement with single param 3" {
         \\ ? as inparam;
     ;
     try testdb.runPreparedStatement(testallocator, query, params);
-    //    testallocator.reset();
 }
 
 test "expect fail simple select prepared statement with single param" {
@@ -494,10 +512,10 @@ test "create table prepared statement with single param 4" {
         \\ DROP TABLE IF EXISTS testtbl;
         \\ CREATE TABLE IF NOT EXISTS testtbl (
         \\  id INT AUTO_INCREMENT PRIMARY KEY,
-        \\  name VARCHAR(255) NOT NULL
-        // \\  active BOOL NOT NULL
-        // \\  timestampe TIMESTAMP NOT NULL
-        // \\  maybe LONG
+        \\  name VARCHAR(255) NOT NULL,
+        \\  active BOOL NOT NULL,
+        \\  timestamp TIMESTAMP NOT NULL,
+        \\  maybe LONG
         \\ );
     );
     while (c.mysql_next_result(testdb.conn) == 0) {
@@ -508,30 +526,27 @@ test "create table prepared statement with single param 4" {
 
 test "insert prepared statement" {
     const testallocator = testarena.allocator();
-    const params = .{"mike"};
-    const query = "INSERT INTO testtbl (name) VALUES (?)";
+    const params = .{ "mike", true };
+    const query = "INSERT INTO testtbl (name,active,timestamp) VALUES (?,?,NOW())";
     try testdb.runPreparedStatement(testallocator, query, params);
-    //    testallocator.reset();
 }
 
 test "insert multiple prepared statements" {
     const testallocator = testarena.allocator();
     const names = .{ "Mike", "John", "Lucky" };
-    const query = "INSERT INTO testtbl (name) VALUES (?)";
+    const query = "INSERT INTO testtbl (name,active, timestamp ) VALUES (?, false, NOW())";
     inline for (names) |name| {
         try testdb.runPreparedStatement(testallocator, query, .{name});
     }
-    //    testallocator.reset();
 }
 
 test "select from table" {
     const testallocator = testarena.allocator();
     const query =
-        \\ SELECT name
+        \\ SELECT *
         \\ FROM testtbl
         \\ WHERE name = ?;
     ;
     const params = .{"Mike"};
     try testdb.runPreparedStatement(testallocator, query, params);
-    //    testallocator.reset();
 }
