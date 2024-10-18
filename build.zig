@@ -82,7 +82,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
+    exe_unit_tests.linkLibC();
+    exe_unit_tests.linkSystemLibrary("mariadb");
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

@@ -1,4 +1,3 @@
-//! MySQL 8.0 API demo
 //! https://dev.mysql.com/doc/c-api/8.0/en/c-api-basic-interface-usage.html
 //!
 const std = @import("std");
@@ -15,6 +14,50 @@ pub const DBInfo = struct {
     database: [:0]const u8,
     port: u32 = 3306,
 };
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const version = c.mysql_get_client_version();
+    print("MySQL client version is {}\n", .{version});
+
+    const db = try DB.init(allocator, .{
+        .database = "testdb",
+        .host = "172.17.0.1",
+        .user = "root",
+        .password = "my-secret-pw",
+    });
+    defer db.deinit();
+
+    try db.execute(
+        \\ DROP TABLE IF EXISTS cat_colors;
+        \\ DROP TABLE IF EXISTS cats;
+        \\ CREATE TABLE IF NOT EXISTS cat_colors (
+        \\  id INT AUTO_INCREMENT PRIMARY KEY,
+        \\  name VARCHAR(255) NOT NULL
+        \\);
+        \\
+        \\CREATE TABLE IF NOT EXISTS cats (
+        \\  id INT AUTO_INCREMENT PRIMARY KEY,
+        \\  name VARCHAR(255) NOT NULL,
+        \\  color_id INT NOT NULL
+        \\)
+    );
+    // Since we use multi-statement, we need to consume all results.
+    // Otherwise we will get following error when we execute next query.
+    // Commands out of sync; you can't run this command now
+    //
+    // https://dev.mysql.com/doc/c-api/8.0/en/mysql-next-result.html
+    while (c.mysql_next_result(db.conn) == 0) {
+        const res = c.mysql_store_result(db.conn);
+        c.mysql_free_result(res);
+    }
+
+    try db.insertTable();
+    try db.queryTable();
+}
 
 pub const DB = struct {
     conn: *c.MYSQL,
@@ -78,7 +121,7 @@ pub const DB = struct {
             errdefer _ = c.mysql_stmt_close(stmt);
 
             if (c.mysql_stmt_prepare(stmt, query, query.len) != 0) {
-                print("Prepare color stmt failed, msg:{s}\n", .{c.mysql_error(self.conn)});
+                print("Prepare stmt failed, msg:{s}\n", .{c.mysql_error(self.conn)});
                 return error.prepareStmt;
             }
 
@@ -168,6 +211,121 @@ pub const DB = struct {
         }
     }
 
+    pub fn columnCount(meta: *c.MYSQL_RES) usize {
+        const column_count = @as(usize, c.mysql_num_fields(meta));
+        return column_count;
+    }
+
+    fn runPreparedStatement(self: DB, allocator: Allocator, query: []const u8, params: anytype) !void {
+        const stmt: *c.MYSQL_STMT = blk: {
+            const stmt = c.mysql_stmt_init(self.conn);
+            if (stmt == null) {
+                return error.initStmt;
+            }
+            errdefer _ = c.mysql_stmt_close(stmt);
+
+            if (c.mysql_stmt_prepare(stmt, @ptrCast(query), query.len) != 0) {
+                print("Prepare color stmt failed, msg:{s}\n", .{c.mysql_error(self.conn)});
+                return error.prepareStmt;
+            }
+
+            break :blk stmt.?;
+        };
+
+        defer _ = c.mysql_stmt_close(stmt);
+
+        const hasParams = params.len > 0;
+        if (hasParams) {
+            var param_binds = try allocator.alloc(c.MYSQL_BIND, params.len);
+            inline for (params, 0..) |param, i| {
+                param_binds[i] = std.mem.zeroes(c.MYSQL_BIND);
+                print("Param:{d} {s} , len: {d} \n", .{ i, param, param.len });
+                param_binds[0].buffer_type = c.MYSQL_TYPE_STRING;
+                param_binds[0].buffer_length = param.len;
+                param_binds[0].is_null = 0;
+                param_binds[0].buffer = @constCast(@ptrCast(param.ptr));
+                std.debug.print("Param binds: {any} \n", .{param_binds[i]});
+            }
+            if (c.mysql_stmt_bind_param(stmt, @ptrCast(@alignCast(param_binds))) != 0) {
+                print("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self.conn)});
+                return error.prepareStmt;
+            }
+        }
+
+        if (c.mysql_stmt_execute(stmt) != 0) {
+            print("Exec color stmt failed: {s}\n", .{c.mysql_error(self.conn)});
+            return error.execStmtError;
+        }
+
+        const metadata = c.mysql_stmt_result_metadata(stmt);
+        if (metadata == null) {
+            return;
+        }
+
+        const columns = c.mysql_fetch_fields(metadata);
+
+        const cols = columnCount(metadata);
+
+        const buffers: [][]u8 = try allocator.alloc([]u8, cols);
+        defer allocator.free(buffers);
+        var length: []c_ulong = try allocator.alloc(c_ulong, cols);
+        defer allocator.free(length);
+        var is_null: []u8 = try allocator.alloc(u8, cols);
+        defer allocator.free(is_null);
+        var err: []u8 = try allocator.alloc(u8, cols);
+        defer allocator.free(err);
+        //std.debug.print("PTRs  {any} , {any} {d} {d} \n", .{ buffers.ptr, length.ptr, &is_null, &err });
+        var r_binds = try allocator.alloc(c.MYSQL_BIND, cols);
+        for (0..cols) |i| {
+            print("columns {any}\n", .{columns[i]});
+            r_binds[i] = std.mem.zeroes(c.MYSQL_BIND);
+            buffers[i] = try allocator.alloc(u8, columns[i].length);
+            r_binds[i].buffer_length = columns[i].length;
+            r_binds[i].buffer = @constCast(@ptrCast(@alignCast(buffers[i])));
+            r_binds[i].is_null = @ptrCast(@alignCast(&is_null[i]));
+            r_binds[i].length = @constCast(@ptrCast(&length[i]));
+            r_binds[i].@"error" = @ptrCast(&err[i]);
+            r_binds[i].buffer_type = c.MYSQL_TYPE_STRING;
+            //std.debug.print("binds: {any} \n", .{r_binds[i]});
+        }
+
+        //      std.debug.print("buffers: {any}\n", .{buffers});
+        //std.debug.print("error: {d}, length: {d}, is_null: {d} \n", .{ err, length, is_null });
+
+        if (c.mysql_stmt_bind_result(stmt, @as([*c]c.MYSQL_BIND, @ptrCast(@alignCast(r_binds)))) != 0) {
+            print("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self.conn)});
+            return error.prepareStmt;
+        }
+        var rowCount: usize = 0;
+        while (true) {
+            const status = c.mysql_stmt_fetch(stmt);
+            //std.debug.print("status:  {d} ", .{status});
+            const proceed = switch (status) {
+                0, c.MYSQL_DATA_TRUNCATED => true,
+                1, c.MYSQL_NO_DATA => false,
+                else => false,
+            };
+            if (status == 1) {
+                std.debug.print("Statement error: {d} \n", .{status});
+                // showStatementError(statement);
+            } else if (status == c.MYSQL_DATA_TRUNCATED) {
+                std.debug.print("WARNING!!!  Statement data truncated: {d} \n", .{status});
+            }
+
+            if (!proceed) break;
+
+            std.debug.print("error: {d}, length: {d}, is_null: {d} \n", .{ err, length, is_null });
+            rowCount = rowCount + 1;
+            for (0..cols) |i| {
+                if (is_null[i] == 1) {
+                    std.debug.print("Row data is NULL \n", .{});
+                } else {
+                    const c_string: [*c]const u8 = @as([*c]u8, @ptrCast(@constCast(@alignCast(r_binds[i].buffer))));
+                    std.debug.print("Row data String: {s} \n", .{c_string});
+                }
+            }
+        }
+    }
     fn insertTable(self: DB) !void {
         const cat_colors = .{
             .{
@@ -260,46 +418,120 @@ pub const DB = struct {
     }
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+var testdb: DB = undefined;
+var testarena: std.heap.ArenaAllocator = undefined;
 
-    const version = c.mysql_get_client_version();
-    print("MySQL client version is {}\n", .{version});
+test "connect" {
+    testarena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    //defer arena.deinit();
+    const testallocator = testarena.allocator();
 
-    const db = try DB.init(allocator, .{
+    testdb = try DB.init(testallocator, .{
         .database = "testdb",
         .host = "172.17.0.1",
         .user = "root",
         .password = "my-secret-pw",
     });
-    defer db.deinit();
+}
+//defer db.deinit();
+test "simple select prepared statement" {
+    const testallocator = testarena.allocator();
+    const query = "SELECT 'just a happy test';";
+    const params = .{};
+    try testdb.runPreparedStatement(testallocator, query, params);
+    //    testallocator.reset();
+}
 
-    try db.execute(
-        \\ DROP TABLE IF EXISTS cat_colors;
-        \\ DROP TABLE IF EXISTS cats;
-        \\ CREATE TABLE IF NOT EXISTS cat_colors (
+test "simple select prepared statement 2 columns" {
+    const testallocator = testarena.allocator();
+    const query = "SELECT 'just a happy test', 'more info';";
+    const params = .{};
+    try testdb.runPreparedStatement(testallocator, query, params);
+    //    testallocator.reset();
+}
+
+test "simple select prepared statement with single param" {
+    const testallocator = testarena.allocator();
+    const query = "SELECT ?  as test";
+    const params = .{"going on"};
+    try testdb.runPreparedStatement(testallocator, query, params);
+    //    testallocator.reset();
+}
+
+test "simple select prepared statement with single param 2" {
+    const testallocator = testarena.allocator();
+    const query = "SELECT 'just a happy test' , ? as inparam;";
+    const params = .{"going on"};
+    try testdb.runPreparedStatement(testallocator, query, params);
+    //    testallocator.reset();
+}
+
+test "simple select prepared statement with single param 3" {
+    const testallocator = testarena.allocator();
+    const params = .{"going on"};
+    const query =
+        \\ SELECT 'just a happy test' ,
+        \\ ? as inparam;
+    ;
+    try testdb.runPreparedStatement(testallocator, query, params);
+    //    testallocator.reset();
+}
+
+test "expect fail simple select prepared statement with single param" {
+    const testallocator = testarena.allocator();
+    const query = "SELECT 'just a happy test' , ? as inparam;";
+    const params = .{};
+    const res = testdb.runPreparedStatement(testallocator, query, params);
+    if (res) |_| {
+        try std.testing.expect(false);
+    } else |err| {
+        try std.testing.expectEqual(error.execStmtError, err);
+    }
+}
+
+test "create table prepared statement with single param 4" {
+    try testdb.execute(
+        \\ DROP TABLE IF EXISTS testtbl;
+        \\ CREATE TABLE IF NOT EXISTS testtbl (
         \\  id INT AUTO_INCREMENT PRIMARY KEY,
         \\  name VARCHAR(255) NOT NULL
-        \\);
-        \\
-        \\CREATE TABLE IF NOT EXISTS cats (
-        \\  id INT AUTO_INCREMENT PRIMARY KEY,
-        \\  name VARCHAR(255) NOT NULL,
-        \\  color_id INT NOT NULL
-        \\)
+        // \\  active BOOL NOT NULL
+        // \\  timestampe TIMESTAMP NOT NULL
+        // \\  maybe LONG
+        \\ );
     );
-    // Since we use multi-statement, we need to consume all results.
-    // Otherwise we will get following error when we execute next query.
-    // Commands out of sync; you can't run this command now
-    //
-    // https://dev.mysql.com/doc/c-api/8.0/en/mysql-next-result.html
-    while (c.mysql_next_result(db.conn) == 0) {
-        const res = c.mysql_store_result(db.conn);
+    while (c.mysql_next_result(testdb.conn) == 0) {
+        const res = c.mysql_store_result(testdb.conn);
         c.mysql_free_result(res);
     }
+}
 
-    try db.insertTable();
-    try db.queryTable();
+test "insert prepared statement" {
+    const testallocator = testarena.allocator();
+    const params = .{"mike"};
+    const query = "INSERT INTO testtbl (name) VALUES (?)";
+    try testdb.runPreparedStatement(testallocator, query, params);
+    //    testallocator.reset();
+}
+
+test "insert multiple prepared statements" {
+    const testallocator = testarena.allocator();
+    const names = .{ "Mike", "John", "Lucky" };
+    const query = "INSERT INTO testtbl (name) VALUES (?)";
+    inline for (names) |name| {
+        try testdb.runPreparedStatement(testallocator, query, .{name});
+    }
+    //    testallocator.reset();
+}
+
+test "select from table" {
+    const testallocator = testarena.allocator();
+    const query =
+        \\ SELECT name
+        \\ FROM testtbl
+        \\ WHERE name = ?;
+    ;
+    const params = .{"Mike"};
+    try testdb.runPreparedStatement(testallocator, query, params);
+    //    testallocator.reset();
 }
