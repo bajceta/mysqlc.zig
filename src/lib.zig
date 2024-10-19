@@ -17,7 +17,7 @@ pub const DB = struct {
     conn: *c.MYSQL,
     allocator: Allocator,
 
-    fn init(allocator: Allocator, db_info: DBInfo) !DB {
+    pub fn init(allocator: Allocator, db_info: DBInfo) !DB {
         const db = c.mysql_init(null);
 
         if (db == null) {
@@ -170,7 +170,7 @@ pub const DB = struct {
         return column_count;
     }
 
-    fn runPreparedStatement(self: DB, allocator: Allocator, query: []const u8, params: anytype) !void {
+    pub fn runPreparedStatement(self: DB, allocator: Allocator, query: []const u8, params: anytype) !void {
         const stmt: *c.MYSQL_STMT = blk: {
             const stmt = c.mysql_stmt_init(self.conn);
             if (stmt == null) {
