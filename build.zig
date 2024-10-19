@@ -13,18 +13,6 @@ pub fn build(b: *std.Build) void {
 
     module.linkSystemLibrary("mariadb", .{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "zmysql",
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    lib.linkLibC();
-    lib.linkSystemLibrary("mariadb");
-
-    b.installArtifact(lib);
-
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
