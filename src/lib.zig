@@ -109,6 +109,18 @@ pub const DB = struct {
         }
     }
 
+    pub fn executeAll(self: DB, query: []const u8) !void {
+        if (c.mysql_real_query(self.conn, query.ptr, query.len) != 0) {
+            print("Exec query failed: {s}\n", .{c.mysql_error(self.conn)});
+            return error.execError;
+        }
+
+        while (c.mysql_next_result(self.conn) == 0) {
+            const res = c.mysql_store_result(self.conn);
+            c.mysql_free_result(res);
+        }
+    }
+
     pub fn columnCount(meta: *c.MYSQL_RES) u32 {
         const column_count: u32 = @intCast(c.mysql_num_fields(meta));
         return column_count;
@@ -358,7 +370,7 @@ test "expect fail simple select prepared statement with single param" {
 }
 
 test "create table prepared statement with single param 4" {
-    try testdb.execute(
+    try testdb.executeAll(
         \\ CREATE DATABASE IF NOT EXISTS testdb;
         \\ USE testdb;
         \\ DROP TABLE IF EXISTS testtbl;
@@ -370,10 +382,6 @@ test "create table prepared statement with single param 4" {
         \\  maybe LONG
         \\ );
     );
-    while (c.mysql_next_result(testdb.conn) == 0) {
-        const res = c.mysql_store_result(testdb.conn);
-        c.mysql_free_result(res);
-    }
 }
 
 test "insert prepared statement" {
