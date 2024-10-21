@@ -31,6 +31,10 @@ COPY ./build.zig.zon .
 COPY ./src ./src
 RUN --mount=type=cache,target=/build/zig-cache zig build test
 
+
+FROM builder AS watch
+CMD /bin/bash -c 'while inotifywait -r -e modify src/*.zig build.zig; do zig build test; done'
+
 FROM test AS build
 RUN --mount=type=cache,target=/build/zig-cache zig build 
 
