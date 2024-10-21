@@ -261,6 +261,7 @@ pub const DB = struct {
                 }
             }
         }
+        printResultSet(rs);
         return rs;
     }
 };
