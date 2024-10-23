@@ -112,12 +112,25 @@ pub const DB = struct {
     pub fn executeAll(self: DB, query: []const u8) !void {
         if (c.mysql_real_query(self.conn, query.ptr, query.len) != 0) {
             print("Exec query failed: {s}\n", .{c.mysql_error(self.conn)});
+            std.log.err("Exec query failed: {s}\n", .{c.mysql_error(self.conn)});
             return error.execError;
         }
 
-        while (c.mysql_next_result(self.conn) == 0) {
-            const res = c.mysql_store_result(self.conn);
-            c.mysql_free_result(res);
+        while (true) {
+            const status = c.mysql_next_result(self.conn);
+            switch (status) {
+                0 => {
+                    const res = c.mysql_store_result(self.conn);
+                    c.mysql_free_result(res);
+                },
+                -1 => {
+                    break;
+                },
+                else => {
+                    print("executeAll failed: {s}\n", .{c.mysql_error(self.conn)});
+                    return error.execError;
+                },
+            }
         }
     }
 
@@ -381,6 +394,58 @@ test "create table prepared statement with single param 4" {
         \\  timestamp TIMESTAMP NOT NULL,
         \\  maybe LONG
         \\ );
+    );
+}
+
+test "executeAll" {
+    try testdb.executeAll(
+        \\ DROP TABLE IF EXISTS oauth2_provider_accesstoken;
+        \\  CREATE TABLE `oauth2_provider_accesstoken` (
+        \\  `id` int(11) NOT NULL AUTO_INCREMENT,
+        \\  `token` varchar(255) NOT NULL,
+        \\  `expires` datetime NOT NULL,
+        \\  `scope` text NOT NULL,
+        \\  `application_id` bigint(20) DEFAULT NULL,
+        \\  `user_id` int(11) DEFAULT NULL,
+        \\  `created` datetime NOT NULL,
+        \\  `updated` datetime NOT NULL,
+        \\  `source_refresh_token_id` bigint(20) DEFAULT NULL,
+        \\  PRIMARY KEY (`id`),
+        \\  UNIQUE KEY `token` (`token`),
+        \\  UNIQUE KEY `source_refresh_token_id` (`source_refresh_token_id`),
+        \\  KEY `oauth2_provider_accesstoken_application_id_b22886e1` (`application_id`),
+        \\  KEY `oauth2_provider_accesstoken_user_id_6e4c9a65` (`user_id`)
+        \\) ENGINE=InnoDB AUTO_INCREMENT=2117744537 DEFAULT CHARSET=latin1
+    );
+}
+
+test "create table apns and gcm" {
+    std.debug.print("create table", .{});
+    try testdb.executeAll(
+        \\  DROP TABLE IF EXISTS gcm;
+        \\  CREATE TABLE gcm (
+        \\   `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+        \\   `notify_id` varchar(200) DEFAULT NULL,
+        \\   `mac` varchar(64) DEFAULT NULL,
+        \\   `send_pn_report` int(11) NOT NULL DEFAULT '3',
+        \\   `user_id` int(11) DEFAULT NULL,
+        \\   `new_version` int(1) DEFAULT '1',
+        \\   `entry` varchar(10) DEFAULT NULL,
+        \\   PRIMARY KEY (`id`),
+        \\   KEY `GCM_INDEX_MAC` (`mac`)
+        \\  ) ENGINE=InnoDB AUTO_INCREMENT=54381836 DEFAULT CHARSET=utf8
+        \\  DROP TABLE IF EXISTS apns;
+        \\  CREATE TABLE apns (
+        \\   `id` int(25) NOT NULL AUTO_INCREMENT,
+        \\   `notify_id` varchar(64) NOT NULL,
+        \\   `mac` varchar(64) NOT NULL,
+        \\   `send_pn_report` int(11) NOT NULL DEFAULT '3',
+        \\   `user_id` int(11) DEFAULT NULL,
+        \\   `new_version` int(1) DEFAULT '1',
+        \\   `entry` varchar(30) DEFAULT NULL,
+        \\   PRIMARY KEY (`id`),
+        \\   KEY `APNS_INDEX_MAC` (`mac`)
+        \\  ) ENGINE=InnoDB AUTO_INCREMENT=436572594 DEFAULT CHARSET=utf8
     );
 }
 
