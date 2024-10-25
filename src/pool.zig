@@ -11,6 +11,7 @@ const ArrayList = std.ArrayList;
 
 pub const PoolOptions = struct {
     size: u16,
+    timeout: usize = 3 * std.time.ns_per_s,
     connection_options: ConnectionOptions,
 };
 
@@ -23,6 +24,7 @@ pub const Pool = struct {
     _mutex: std.Thread.Mutex,
     _condition: std.Thread.Condition,
     _timeout: usize,
+    _size: u16,
 
     pub fn init(allocator: Allocator, options: PoolOptions) !*Self {
         const r = try allocator.create(Self);
@@ -35,7 +37,8 @@ pub const Pool = struct {
             .options = options,
             ._mutex = .{},
             ._condition = .{},
-            ._timeout = 1 * std.time.ns_per_s,
+            ._timeout = options.timeout,
+            ._size = options.size,
         };
         return r;
     }
@@ -48,14 +51,14 @@ pub const Pool = struct {
         self.allocator.destroy(self);
     }
 
-    fn getFreeConn(self: *Self) ?*Conn {
+    fn getFreeConn(self: *Self) !*Conn {
         for (self.connections.items) |conn| {
             if (!conn.busy) {
                 conn.busy = true;
                 return conn;
             }
         }
-        return null;
+        return error.poolBusy;
     }
     fn printPoolStats(self: *Self) void {
         var free: u8 = 0;
@@ -86,21 +89,21 @@ pub const Pool = struct {
         }
         const max_fails = 3;
         var retry_counter: u8 = 0;
+        var timer = try std.time.Timer.start();
         while (retry_counter < max_fails) {
-            if (self.getFreeConn()) |val| {
-                //std.debug.print("get({}) found free \n", .{id});
-                return val;
-            } else {
+            const conn = self.getFreeConn() catch {
+                var elapsed = timer.read();
                 //std.debug.print("get({}) wait for condition \n", .{id});
-                var timer = try std.time.Timer.start();
-                self._condition.timedWait(&self._mutex, self._timeout) catch {
+                self._condition.timedWait(&self._mutex, self._timeout - elapsed) catch {
                     //std.debug.print("get({}) timeout  {}\n", .{ id, err });
-                    return error.poolBusy;
+                    return error.poolTimeout;
                 };
-                const elapsed = timer.lap();
+                elapsed = timer.read();
                 if (debug) std.debug.print("get({}) wait over {d} \n", .{ id, elapsed });
                 retry_counter += 1;
-            }
+                continue;
+            };
+            return conn;
         }
 
         return error.poolBusy;
