@@ -12,11 +12,11 @@ const log = @import("lib.zig").log;
 const Row = @import("lib.zig").Row;
 const ResultSet = @import("lib.zig").ResultSet;
 
-pub const DBInfo = struct {
-    host: [:0]const u8,
-    user: [:0]const u8,
-    password: [:0]const u8,
-    database: [:0]const u8,
+pub const ConnectionOptions = struct {
+    database: []const u8,
+    host: []const u8,
+    user: []const u8,
+    password: []const u8,
     port: u32 = 3306,
 };
 
@@ -29,7 +29,8 @@ pub const Conn = struct {
     busy: bool,
     dirty: bool,
 
-    pub fn init(allocator: Allocator, db_info: DBInfo, pool: ?*Pool) !*Self {
+    pub fn init(allocator: Allocator, db_info: ConnectionOptions, pool: ?*Pool) !*Self {
+        log.debug("Init mysql connection, host: {s}, user: {s}, database: {s}, port: {d} \n", .{ db_info.database, db_info.user, db_info.database, db_info.port });
         const conn = try allocator.create(Self);
 
         errdefer allocator.destroy(conn);
@@ -43,15 +44,15 @@ pub const Conn = struct {
 
         if (c.mysql_real_connect(
             _mysql,
-            db_info.host,
-            db_info.user,
-            db_info.password,
-            db_info.database,
+            db_info.host.ptr,
+            db_info.user.ptr,
+            db_info.password.ptr,
+            db_info.database.ptr,
             db_info.port,
             null,
             c.CLIENT_MULTI_STATEMENTS,
         ) == null) {
-            std.log.err("Connect to database failed: {s}\n", .{c.mysql_error(_mysql)});
+            log.warn("Connect to database failed: {s}\n", .{c.mysql_error(_mysql)});
             return error.connectError;
         }
 
@@ -158,7 +159,7 @@ pub const Conn = struct {
                 if (debug) std.debug.print("Param binds: {any} \n", .{param_binds[i]});
             }
             if (c.mysql_stmt_bind_param(stmt, @ptrCast(@alignCast(param_binds))) != 0) {
-                std.log.err("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self._mysql)});
+                log.warn("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self._mysql)});
                 return error.prepareStmt;
             }
         }
@@ -214,7 +215,8 @@ pub const Conn = struct {
         }
 
         if (c.mysql_stmt_bind_result(stmt, @as([*c]c.MYSQL_BIND, @ptrCast(@alignCast(r_binds)))) != 0) {
-            print("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self._mysql)});
+            log.warn("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self._mysql)});
+            self.dirty = true;
             return error.prepareStmt;
         }
         var rowCount: usize = 0;
@@ -227,20 +229,20 @@ pub const Conn = struct {
                 else => false,
             };
             if (status == 1) {
-                std.debug.print("Statement error: {d} \n", .{status});
+                log.warn("Statement error: {d} \n", .{status});
                 // showStatementError(statement);
             } else if (status == c.MYSQL_DATA_TRUNCATED) {
-                std.debug.print("WARNING!!!  Statement data truncated: {d} \n", .{status});
+                log.warn("WARNING!!!  Statement data truncated: {d} \n", .{status});
             }
 
             if (!proceed) break;
 
-            std.log.debug("error: {d}, length: {d}, is_null: {d} \n", .{ err, length, is_null });
+            if (debug) log.debug("error: {d}, length: {d}, is_null: {d} \n", .{ err, length, is_null });
             rowCount = rowCount + 1;
             const row = try rs.addRow(cols);
             for (0..cols) |i| {
                 if (is_null[i] == 1) {
-                    std.log.debug("Row data is NULL \n", .{});
+                    if (debug) log.debug("Row data is NULL \n", .{});
                     try row.columns.append(null);
                 } else {
                     const output_data = try row.allocator.alloc(u8, length[i]);
@@ -250,12 +252,12 @@ pub const Conn = struct {
                     switch (r_binds[i].buffer_type) {
                         c.MYSQL_TYPE_TINY => {
                             const data: *u8 = @as(*u8, @ptrCast(@constCast(r_binds[i].buffer)));
-                            std.log.debug("Row data Tiny: {d} \n", .{data.*});
+                            if (debug) log.debug("Row data Tiny: {d} \n", .{data.*});
                             output_data[0] = data.*;
                         },
                         else => {
                             const data: [*c]const u8 = @as([*c]u8, @ptrCast(@constCast(@alignCast(r_binds[i].buffer))));
-                            std.log.debug("Row data String: {s} \n", .{data});
+                            if (debug) log.debug("Row data String: {s} \n", .{data});
                             @memcpy(output_data[0..length[i]], data[0..length[i]]);
                         },
                     }
@@ -263,9 +265,10 @@ pub const Conn = struct {
             }
         }
         if (c.mysql_stmt_free_result(stmt) != 0) {
-            print("Failed to free statement results {s}", .{c.mysql_stmt_error(stmt)});
+            log.warn("Failed to free statement results {s}", .{c.mysql_stmt_error(stmt)});
+            self.dirty = true;
         }
-        printResultSet(rs);
+        if (debug) printResultSet(rs);
         return rs;
     }
 };
@@ -422,6 +425,27 @@ test "select from table" {
     const params = .{"Mike"};
     const rs = try testdb.runPreparedStatement(std.testing.allocator, query, params);
     defer rs.deinit();
+    printResultSet(rs);
+}
+
+test "connect testdb" {
+    testarena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const testallocator = testarena.allocator();
+
+    const conn = try Conn.init(testallocator, .{
+        .database = "testdb",
+        .host = "172.17.0.1",
+        .user = "root",
+        .password = "my-secret-pw",
+    }, null);
+    defer conn.deinit();
+    const query =
+        \\ SELECT DATABASE();
+    ;
+    const params = .{};
+    const rs = try conn.runPreparedStatement(std.testing.allocator, query, params);
+    defer rs.deinit();
+    try std.testing.expectEqualStrings("testdb", rs.rows.items[0].columns.items[0].?);
     printResultSet(rs);
 }
 

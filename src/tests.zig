@@ -1,7 +1,9 @@
-//const lib = @import("lib.zig");
+const conn = @import("conn.zig");
 const pool = @import("pool.zig");
+const std = @import("std");
 
 test "global" {
-    //   _ = lib;
+    std.testing.log_level = std.log.Level.debug;
+    _ = conn;
     _ = pool;
 }

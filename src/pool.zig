@@ -2,20 +2,29 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const Conn = @import("lib.zig").Conn;
+const log = @import("lib.zig").log;
+const ConnectionOptions = @import("lib.zig").ConnectionOptions;
+
 const testing = std.testing;
 
 const ArrayList = std.ArrayList;
 
+pub const PoolOptions = struct {
+    size: u16,
+    connection_options: ConnectionOptions,
+};
+
+const debug = false;
 pub const Pool = struct {
     const Self = @This();
     allocator: Allocator,
     connections: ArrayList(*Conn),
-    size: u32,
+    options: PoolOptions,
     _mutex: std.Thread.Mutex,
     _condition: std.Thread.Condition,
     _timeout: usize,
 
-    pub fn init(allocator: Allocator, size: u32) !*Self {
+    pub fn init(allocator: Allocator, options: PoolOptions) !*Self {
         const r = try allocator.create(Self);
         errdefer allocator.destroy(r);
         const connections = ArrayList(*Conn).init(allocator);
@@ -23,7 +32,7 @@ pub const Pool = struct {
         r.* = .{
             .allocator = allocator,
             .connections = connections,
-            .size = size,
+            .options = options,
             ._mutex = .{},
             ._condition = .{},
             ._timeout = 1 * std.time.ns_per_s,
@@ -57,30 +66,20 @@ pub const Pool = struct {
             }
         }
 
-        std.debug.print("Size: {d}, free: {d}\n", .{ self.connections.items.len, free });
+        log.debug("Size: {d}, free: {d}\n", .{ self.connections.items.len, free });
     }
 
-    pub fn get(self: *Self, id: usize) !*Conn {
-        _ = id;
-        if (self._get()) |conn| {
-            return conn;
-        } else |err| {
-            return err;
-        }
+    pub fn get(self: *Self) !*Conn {
+        return try self._get();
     }
     fn _get(self: *Self) !*Conn {
         const id = std.Thread.getCurrentId();
-        self.printPoolStats();
+        if (debug) self.printPoolStats();
         self._mutex.lock();
         defer self._mutex.unlock();
-        if (self.connections.items.len < self.size) {
-            std.debug.print("get({d}) create new\n", .{id});
-            var conn = try Conn.init(self.allocator, .{
-                .database = "",
-                .host = "172.17.0.1",
-                .user = "root",
-                .password = "my-secret-pw",
-            }, self);
+        if (self.connections.items.len < self.options.size) {
+            //std.debug.print("get({d}) create new\n", .{id});
+            var conn = try Conn.init(self.allocator, self.options.connection_options, self);
             conn.busy = true;
             try self.connections.append(conn);
             return conn;
@@ -89,17 +88,17 @@ pub const Pool = struct {
         var retry_counter: u8 = 0;
         while (retry_counter < max_fails) {
             if (self.getFreeConn()) |val| {
-                std.debug.print("get({}) found free \n", .{id});
+                //std.debug.print("get({}) found free \n", .{id});
                 return val;
             } else {
-                std.debug.print("get({}) wait for condition \n", .{id});
+                //std.debug.print("get({}) wait for condition \n", .{id});
                 var timer = try std.time.Timer.start();
-                self._condition.timedWait(&self._mutex, self._timeout) catch |err| {
-                    std.debug.print("get({}) timeout  {}\n", .{ id, err });
+                self._condition.timedWait(&self._mutex, self._timeout) catch {
+                    //std.debug.print("get({}) timeout  {}\n", .{ id, err });
                     return error.poolBusy;
                 };
                 const elapsed = timer.lap();
-                std.debug.print("get({}) wait over {d} \n", .{ id, elapsed });
+                if (debug) std.debug.print("get({}) wait over {d} \n", .{ id, elapsed });
                 retry_counter += 1;
             }
         }
@@ -111,7 +110,7 @@ pub const Pool = struct {
         if (true) {
             const id = std.Thread.getCurrentId();
             self._mutex.lock();
-            std.debug.print("release({}) \n", .{id});
+            if (debug) std.debug.print("release({}) \n", .{id});
             // if (conn.dirty) {
             //     conn.deinit();
             //     self.connections.
@@ -125,10 +124,17 @@ pub const Pool = struct {
     }
 };
 
+const test_pool_options = PoolOptions{ .size = 5, .connection_options = ConnectionOptions{
+    .database = "",
+    .host = "172.17.0.1",
+    .user = "root",
+    .password = "my-secret-pw",
+} };
+
 test "get connection" {
     const allocator = std.testing.allocator;
-    const pool = try Pool.init(allocator, 5);
-    const conn: *Conn = try pool.get(288);
+    const pool = try Pool.init(allocator, test_pool_options);
+    const conn: *Conn = try pool.get();
     const rs = try conn.runPreparedStatement(allocator, "Select \"hello\" as greeting ", .{});
     defer rs.deinit();
     defer pool.deinit();
@@ -141,9 +147,9 @@ var testarena: std.heap.ArenaAllocator = undefined;
 test "twice" {
     const allocator = std.testing.allocator;
 
-    const pool = try Pool.init(allocator, 5);
+    const pool = try Pool.init(allocator, test_pool_options);
     defer pool.deinit();
-    const conn: *Conn = try pool.get(289);
+    const conn: *Conn = try pool.get();
 
     {
         const rs = try conn.runPreparedStatement(allocator, "Select \"hello\" as greeting ", .{});
@@ -159,6 +165,52 @@ test "twice" {
     }
 }
 
+test "connect db" {
+    testarena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const testallocator = testarena.allocator();
+
+    const pool = try Pool.init(testallocator, PoolOptions{ .size = 2, .connection_options = .{
+        .database = "testdb",
+        .host = "172.17.0.1",
+        .user = "root",
+        .password = "my-secret-pw",
+    } });
+    defer pool.deinit();
+    const query =
+        \\ SELECT DATABASE();
+    ;
+    const params = .{};
+    const conn = try pool.get();
+    const rs = try conn.runPreparedStatement(std.testing.allocator, query, params);
+    try std.testing.expectEqualStrings("testdb", rs.rows.items[0].columns.items[0].?);
+    defer rs.deinit();
+}
+
+test "connect no db" {
+    testarena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const testallocator = testarena.allocator();
+
+    const pool = try Pool.init(testallocator, PoolOptions{ .size = 2, .connection_options = .{
+        .database = "",
+        .host = "172.17.0.1",
+        .user = "root",
+        .password = "my-secret-pw",
+    } });
+    defer pool.deinit();
+    const query =
+        \\ SELECT *
+        \\ FROM testtbl
+        \\ WHERE name = ?;
+    ;
+    const params = .{"Mike"};
+    const conn = try pool.get();
+    _ = conn.runPreparedStatement(std.testing.allocator, query, params) catch |err| {
+        log.debug("Error: {?}", .{err});
+        return;
+    };
+    try std.testing.expect(false);
+}
+
 var err_counter: usize = 0;
 var prepared_fail: usize = 0;
 var get_fail: usize = 0;
@@ -166,8 +218,8 @@ var ok_counter: usize = 0;
 fn testConnFromPool(pool: *Pool, run: *bool) !void {
     while (run.*) {
         const id = std.Thread.getCurrentId();
-        const conn = pool.get(id) catch |err| {
-            std.debug.print("get({}) error: {?}\n", .{ id, err });
+        const conn = pool.get() catch |err| {
+            log.warn("get({}) error: {?}\n", .{ id, err });
             get_fail += 1;
             continue;
         };
@@ -201,15 +253,17 @@ fn testConnFromPool(pool: *Pool, run: *bool) !void {
 test "start 10 threads to test the pool" {
     const runners = 10;
     const allocator = std.testing.allocator;
-    const pool = try Pool.init(allocator, 5);
+    const pool = try Pool.init(allocator, test_pool_options);
     defer pool.deinit();
     var run = true;
-    for (0..runners) |i| {
-        std.debug.print("Start thread  : {d}\n", .{i});
+    for (0..runners) |_| {
         _ = try std.Thread.spawn(.{}, testConnFromPool, .{ pool, &run });
     }
     std.time.sleep(5 * std.time.ns_per_s);
     run = false;
     std.time.sleep(1 * std.time.ns_per_s);
     std.debug.print("OK: {d}, ERROR: {d},  GET_FAIL: {d}, PREPARED_FAIL {d} \n", .{ ok_counter, err_counter, get_fail, prepared_fail });
+    try std.testing.expect(ok_counter > 125);
+    try std.testing.expect(get_fail < 5);
+    try std.testing.expect(err_counter == 0);
 }
