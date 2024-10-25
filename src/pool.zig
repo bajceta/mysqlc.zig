@@ -106,7 +106,7 @@ pub const Pool = struct {
             return conn;
         }
 
-        return error.poolBusy;
+        return self.getFreeConn();
     }
 
     pub fn release(self: *Self, conn: *Conn) void {
@@ -254,17 +254,21 @@ fn testConnFromPool(pool: *Pool, run: *bool) !void {
 }
 
 test "start 10 threads to test the pool" {
-    const runners = 10;
+    const runners = 30;
     const allocator = std.testing.allocator;
     const pool = try Pool.init(allocator, test_pool_options);
     defer pool.deinit();
     var run = true;
-    for (0..runners) |_| {
-        _ = try std.Thread.spawn(.{}, testConnFromPool, .{ pool, &run });
+    // var threads = [_]std.Thread{} ** runners;
+    var threads: [runners]std.Thread = undefined;
+    for (0..runners) |i| {
+        threads[i] = try std.Thread.spawn(.{}, testConnFromPool, .{ pool, &run });
     }
     std.time.sleep(5 * std.time.ns_per_s);
     run = false;
-    std.time.sleep(1 * std.time.ns_per_s);
+    for (threads) |thread| {
+        thread.join();
+    }
     std.debug.print("OK: {d}, ERROR: {d},  GET_FAIL: {d}, PREPARED_FAIL {d} \n", .{ ok_counter, err_counter, get_fail, prepared_fail });
     try std.testing.expect(ok_counter > 125);
     try std.testing.expect(get_fail < 5);
