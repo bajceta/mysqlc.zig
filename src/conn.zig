@@ -176,6 +176,8 @@ pub const Conn = struct {
             return rs;
         }
 
+        defer c.mysql_free_result(metadata);
+
         const columns = c.mysql_fetch_fields(metadata);
 
         const cols: u32 = @intCast(c.mysql_num_fields(metadata));
