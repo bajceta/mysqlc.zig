@@ -161,14 +161,14 @@ pub const Conn = struct {
                 if (debug) std.debug.print("Param binds: {any} \n", .{param_binds[i]});
             }
             if (c.mysql_stmt_bind_param(stmt, @ptrCast(@alignCast(param_binds))) != 0) {
-                log.warn("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self._mysql)});
+                log.warn("Prepare cat stmt failed: {s}\n", .{c.mysql_stmt_error(stmt)});
                 self.dirty = true;
                 return error.prepareStmt;
             }
         }
 
         if (c.mysql_stmt_execute(stmt) != 0) {
-            log.warn("Exec stmt failed: {s}\n", .{c.mysql_error(self._mysql)});
+            log.warn("Exec stmt failed: {s}\n", .{c.mysql_stmt_error(stmt)});
             self.dirty = true;
             return error.execStmtError;
         }
@@ -222,7 +222,7 @@ pub const Conn = struct {
         }
 
         if (c.mysql_stmt_bind_result(stmt, @as([*c]c.MYSQL_BIND, @ptrCast(@alignCast(r_binds)))) != 0) {
-            log.warn("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self._mysql)});
+            log.warn("Bind result failed: {s}\n", .{c.mysql_stmt_error(stmt)});
             self.dirty = true;
             return error.prepareStmt;
         }
