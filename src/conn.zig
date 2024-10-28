@@ -281,13 +281,12 @@ pub const Conn = struct {
 };
 
 var testdb: *Conn = undefined;
-var testarena: std.heap.ArenaAllocator = undefined;
+
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+var testallocatorgpa = gpa.allocator();
 
 test "connect 1" {
-    testarena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const testallocator = testarena.allocator();
-
-    testdb = try Conn.init(testallocator, .{
+    testdb = try Conn.init(testallocatorgpa, .{
         .database = "",
         .host = "172.17.0.1",
         .user = "root",
@@ -325,17 +324,17 @@ test "simple select prepared statement 2 columns" {
 }
 
 test "simple select prepared statement with single param" {
-    const testallocator = testarena.allocator();
     const query = "SELECT ?  as test";
     const params = .{"going on"};
-    _ = try testdb.runPreparedStatement(testallocator, query, params);
+    const rs = try testdb.runPreparedStatement(std.testing.allocator, query, params);
+    rs.deinit();
 }
 
 test "simple select prepared statement with single param 2" {
-    const testallocator = testarena.allocator();
     const query = "SELECT 'just a happy test' , ? as inparam;";
     const params = .{"going on"};
-    _ = try testdb.runPreparedStatement(testallocator, query, params);
+    const rs = try testdb.runPreparedStatement(std.testing.allocator, query, params);
+    rs.deinit();
 }
 
 test "simple select prepared statement with single param 3" {
@@ -408,10 +407,10 @@ test "expect error create table apns and gcm" {
 }
 
 test "insert prepared statement" {
-    const testallocator = testarena.allocator();
     const params = .{ "mike", true };
     const query = "INSERT INTO testtbl (name,active,timestamp) VALUES (?,?,NOW())";
-    _ = try testdb.runPreparedStatement(testallocator, query, params);
+    const rs = try testdb.runPreparedStatement(std.testing.allocator, query, params);
+    rs.deinit();
 }
 
 test "insert multiple prepared statements" {
@@ -436,10 +435,7 @@ test "select from table" {
 }
 
 test "connect testdb" {
-    testarena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const testallocator = testarena.allocator();
-
-    const conn = try Conn.init(testallocator, .{
+    const conn = try Conn.init(std.testing.allocator, .{
         .database = "testdb",
         .host = "172.17.0.1",
         .user = "root",

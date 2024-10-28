@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     exe_unit_tests.linkLibC();
-    exe_unit_tests.linkSystemLibrary("mariadb");
+    exe_unit_tests.linkSystemLibrary("libmariadb");
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
     const test_step = b.step("test", "Run unit tests");

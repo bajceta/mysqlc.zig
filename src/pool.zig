@@ -147,8 +147,6 @@ test "get connection" {
     try std.testing.expectEqualStrings("hello", rs.rows.items[0].columns.items[0].?);
 }
 
-var testarena: std.heap.ArenaAllocator = undefined;
-
 test "twice" {
     const allocator = std.testing.allocator;
 
@@ -171,10 +169,7 @@ test "twice" {
 }
 
 test "connect db" {
-    testarena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const testallocator = testarena.allocator();
-
-    const pool = try Pool.init(testallocator, PoolOptions{ .size = 2, .connection_options = .{
+    const pool = try Pool.init(std.testing.allocator, PoolOptions{ .size = 2, .connection_options = .{
         .database = "testdb",
         .host = "172.17.0.1",
         .user = "root",
@@ -192,10 +187,7 @@ test "connect db" {
 }
 
 test "connect no db" {
-    testarena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const testallocator = testarena.allocator();
-
-    const pool = try Pool.init(testallocator, PoolOptions{ .size = 2, .connection_options = .{
+    const pool = try Pool.init(std.testing.allocator, PoolOptions{ .size = 2, .connection_options = .{
         .database = "",
         .host = "172.17.0.1",
         .user = "root",

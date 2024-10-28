@@ -9,18 +9,24 @@ pub const ResultSet = struct {
 
     pub fn init(allocator: Allocator) !*Self {
         const r = try allocator.create(ResultSet);
+        errdefer allocator.destroy(r);
+        const rows = ArrayList(*Row).init(allocator);
+        errdefer rows.deinit();
+
         r.* = .{
             .allocator = allocator,
-            .rows = ArrayList(*Row).init(allocator),
+            .rows = rows,
         };
         return r;
     }
 
     pub fn addRow(self: *Self, column_count: u32) !*Row {
         const row = try Row.init(self.allocator, column_count);
+        errdefer row.deinit();
         try self.rows.append(row);
         return row;
     }
+
     pub fn deinit(self: *Self) void {
         for (self.rows.items) |row| {
             row.deinit();
@@ -37,13 +43,17 @@ pub const Row = struct {
 
     pub fn init(allocator: Allocator, size: u32) !*Self {
         const r = try allocator.create(Row);
+        errdefer allocator.destroy(r);
+        const columns = try ArrayList(?[]u8).initCapacity(allocator, size);
+        errdefer columns.deinit();
 
         r.* = .{
             .allocator = allocator,
-            .columns = try ArrayList(?[]u8).initCapacity(allocator, size),
+            .columns = columns,
         };
         return r;
     }
+
     pub fn deinit(self: *Self) void {
         for (self.columns.items) |column| {
             if (column) |val| {
