@@ -162,12 +162,14 @@ pub const Conn = struct {
             }
             if (c.mysql_stmt_bind_param(stmt, @ptrCast(@alignCast(param_binds))) != 0) {
                 log.warn("Prepare cat stmt failed: {s}\n", .{c.mysql_error(self._mysql)});
+                self.dirty = true;
                 return error.prepareStmt;
             }
         }
 
         if (c.mysql_stmt_execute(stmt) != 0) {
-            //std.log.err("Exec stmt failed: {s}\n", .{c.mysql_error(self._mysql)});
+            log.warn("Exec stmt failed: {s}\n", .{c.mysql_error(self._mysql)});
+            self.dirty = true;
             return error.execStmtError;
         }
 
