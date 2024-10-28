@@ -115,11 +115,6 @@ pub const Conn = struct {
         }
     }
 
-    pub fn columnCount(meta: *c.MYSQL_RES) u32 {
-        const column_count: u32 = @intCast(c.mysql_num_fields(meta));
-        return column_count;
-    }
-
     pub fn runPreparedStatement(self: *Self, allocator: Allocator, query: []const u8, params: anytype) !*ResultSet {
         const rs = try ResultSet.init(allocator);
         errdefer rs.deinit();
@@ -183,7 +178,8 @@ pub const Conn = struct {
 
         const columns = c.mysql_fetch_fields(metadata);
 
-        const cols = columnCount(metadata);
+        const cols: u32 = @intCast(c.mysql_num_fields(metadata));
+        // const cols = columnCount(metadata);
 
         const buffers: [][]u8 = try allocator.alloc([]u8, cols);
         defer allocator.free(buffers);
