@@ -54,6 +54,9 @@ pub const Pool = struct {
     fn getFreeConn(self: *Self) !*Conn {
         for (self.connections.items) |conn| {
             if (!conn.busy) {
+                if (conn.dirty) {
+                    try conn.connect(self.options.connection_options);
+                }
                 conn.busy = true;
                 return conn;
             }
@@ -114,10 +117,9 @@ pub const Pool = struct {
             const id = std.Thread.getCurrentId();
             self._mutex.lock();
             if (debug) std.debug.print("release({}) \n", .{id});
-            // if (conn.dirty) {
-            //     conn.deinit();
-            //     self.connections.
-            // }
+            if (conn.dirty) {
+                conn.disconnect();
+            }
             conn.busy = false;
             self._condition.signal();
             self._mutex.unlock();

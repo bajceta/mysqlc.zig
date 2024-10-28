@@ -35,6 +35,19 @@ pub const Conn = struct {
 
         errdefer allocator.destroy(conn);
 
+        conn.allocator = allocator;
+        conn.pool = pool;
+        conn.busy = false;
+
+        try conn.connect(db_info);
+        return conn;
+    }
+
+    pub fn disconnect(self: *Self) void {
+        c.mysql_close(self._mysql);
+    }
+
+    pub fn connect(self: *Self, db_info: ConnectionOptions) !void {
         const _mysql = c.mysql_init(null);
         errdefer c.mysql_close(_mysql);
 
@@ -56,14 +69,8 @@ pub const Conn = struct {
             return error.connectError;
         }
 
-        conn.* = .{
-            ._mysql = _mysql,
-            .allocator = allocator,
-            .pool = pool,
-            .busy = false,
-            .dirty = false,
-        };
-        return conn;
+        self._mysql = _mysql;
+        self.dirty = false;
     }
 
     pub fn release(self: *Self) void {
@@ -276,7 +283,7 @@ pub const Conn = struct {
 var testdb: *Conn = undefined;
 var testarena: std.heap.ArenaAllocator = undefined;
 
-test "connect" {
+test "connect 1" {
     testarena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const testallocator = testarena.allocator();
 
